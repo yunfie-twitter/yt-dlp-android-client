@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import okhttp3.ResponseBody
 import org.yunfie.ytdlpclient.YtDlpApplication
 import org.yunfie.ytdlpclient.data.VideoRequest
+import org.yunfie.ytdlpclient.data.room.DownloadHistory
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -33,9 +34,11 @@ class DownloadWorker(
 
     override suspend fun doWork(): Result {
         val url = inputData.getString(KEY_URL) ?: return Result.failure()
-        val format = inputData.getString(KEY_FORMAT)
+        val formatId = inputData.getString(KEY_FORMAT_ID)
         val audioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
         val title = inputData.getString(KEY_TITLE) ?: "Downloading..."
+        val uploader = inputData.getString(KEY_UPLOADER) ?: "Unknown"
+        val thumbnail = inputData.getString(KEY_THUMBNAIL)
 
         val notificationId = title.hashCode()
         setForeground(createForegroundInfo(notificationId, title, 0))
@@ -49,7 +52,10 @@ class DownloadWorker(
 
         return try {
             // 1. Start Server Task
-            val request = VideoRequest(url = url, format = format, audioOnly = audioOnly)
+            // Use formatId if provided, otherwise default to "best" or "bestaudio" logic
+            val finalFormat = formatId ?: if (audioOnly) "bestaudio" else "best"
+            
+            val request = VideoRequest(url = url, format = finalFormat, audioOnly = audioOnly)
             val startResponse = api.startDownload(request)
             val taskId = startResponse.taskId
 
@@ -83,13 +89,42 @@ class DownloadWorker(
             
             val responseBody = api.downloadFile(serverFilename)
             val savedUri = saveFileToMediaStore(responseBody, serverFilename, audioOnly)
+                ?: throw Exception("Failed to save file to MediaStore")
 
             updateNotification(notificationId, title, "ダウンロード完了", 100, false)
+            
+            // 4. Save to History
+            val history = DownloadHistory(
+                title = title,
+                uploader = uploader,
+                url = url,
+                thumbnail = thumbnail,
+                timestamp = System.currentTimeMillis(),
+                status = "completed",
+                filePath = savedUri.toString(),
+                isAudio = audioOnly
+            )
+            app.database.historyDao().insert(history)
             
             Result.success(workDataOf("uri" to savedUri.toString()))
         } catch (e: Exception) {
             e.printStackTrace()
             updateNotification(notificationId, "エラー", e.message ?: "Unknown error", 0, false)
+            
+            // Save failed history
+            /*
+            val history = DownloadHistory(
+                title = title,
+                uploader = uploader,
+                url = url,
+                thumbnail = thumbnail,
+                timestamp = System.currentTimeMillis(),
+                status = "failed",
+                isAudio = audioOnly
+            )
+            app.database.historyDao().insert(history)
+            */
+            
             Result.failure(workDataOf("error" to e.message))
         }
     }
@@ -172,8 +207,11 @@ class DownloadWorker(
 
     companion object {
         const val KEY_URL = "key_url"
-        const val KEY_FORMAT = "key_format"
+        const val KEY_FORMAT_ID = "key_format_id" // Changed from KEY_FORMAT
+        const val KEY_FORMAT = "key_format" // Keep for compatibility/fallback
         const val KEY_AUDIO_ONLY = "key_audio_only"
         const val KEY_TITLE = "key_title"
+        const val KEY_UPLOADER = "key_uploader"
+        const val KEY_THUMBNAIL = "key_thumbnail"
     }
 }
