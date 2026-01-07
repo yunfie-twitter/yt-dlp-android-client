@@ -14,8 +14,8 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import okhttp3.ResponseBody
-import org.yunfie.ytdlpclient.R
 import org.yunfie.ytdlpclient.YtDlpApplication
 import org.yunfie.ytdlpclient.data.VideoRequest
 import java.io.File
@@ -40,10 +40,9 @@ class DownloadWorker(
         setForeground(createForegroundInfo(notificationId, title, 0))
 
         val app = applicationContext as YtDlpApplication
-        // We need a way to get the API. Ideally via Hilt/Koin, but here accessing manually for now.
-        // Assuming base URL is saved and we can recreate or access the global one.
-        // For simplicity, we assume the app has an initialized repository or we grab the saved URL.
-        val baseUrl = app.settingsRepository.apiUrl.kotlinx.coroutines.flow.firstOrNull() 
+        
+        // Fix: Use correct import for firstOrNull() instead of inline package name
+        val baseUrl = app.settingsRepository.apiUrl.firstOrNull() 
             ?: return Result.failure(workDataOf("error" to "API URL not set"))
         
         val api = app.createApi(baseUrl)
@@ -66,7 +65,7 @@ class DownloadWorker(
                 val serverProgress = status.progress ?: 0.0
                 val displayProgress = (serverProgress / 2).toInt()
                 
-                updateNotification(notificationId, title, "Processing on server... ${String.format("%.1f", serverProgress)}%", displayProgress)
+                updateNotification(notificationId, title, "サーバーで処理中... ${String.format("%.1f", serverProgress)}%", displayProgress)
 
                 if (status.status == "completed") {
                     serverFilename = status.filename
@@ -81,24 +80,17 @@ class DownloadWorker(
             if (serverFilename == null) throw Exception("No filename returned")
 
             // 3. Download File from Server to Device
-            updateNotification(notificationId, title, "Downloading to device...", 50)
-            
-            // Assuming the server exposes files at /files/{filename} or similar.
-            // We need to extend the API for this, or assume a convention.
-            // Let's assume a 'download_file' endpoint or static path relative to base.
-            // Since we can't change the API interface easily here without verifying the server,
-            // we'll try to download using OkHttp directly or add a method if possible.
-            // For now, let's use the `api.downloadFile` which we will add.
+            updateNotification(notificationId, title, "端末にダウンロード中...", 50)
             
             val responseBody = api.downloadFile(serverFilename)
             val savedUri = saveFileToMediaStore(responseBody, serverFilename, audioOnly)
 
-            updateNotification(notificationId, title, "Download complete", 100)
+            updateNotification(notificationId, title, "ダウンロード完了", 100, false)
             
             Result.success(workDataOf("uri" to savedUri.toString()))
         } catch (e: Exception) {
             e.printStackTrace()
-            updateNotification(notificationId, "Error", e.message ?: "Unknown error", 0, false)
+            updateNotification(notificationId, "エラー", e.message ?: "Unknown error", 0, false)
             Result.failure(workDataOf("error" to e.message))
         }
     }
@@ -107,8 +99,12 @@ class DownloadWorker(
         val resolver = applicationContext.contentResolver
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            put(MediaStore.MediaColumns.MIME_TYPE, if (isAudio) "audio/mp3" else "video/mp4") // Simplified
+            put(MediaStore.MediaColumns.MIME_TYPE, if (isAudio) "audio/mp3" else "video/mp4")
             put(MediaStore.MediaColumns.RELATIVE_PATH, if (isAudio) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_MOVIES)
+            // For Android 10+ (Q), IS_PENDING is used while writing
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
         }
 
         val collection = if (isAudio) {
@@ -119,11 +115,24 @@ class DownloadWorker(
 
         val uri = resolver.insert(collection, contentValues) ?: return null
 
-        resolver.openOutputStream(uri)?.use { outputStream ->
-            body.byteStream().use { inputStream ->
-                inputStream.copyTo(outputStream)
+        try {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                body.byteStream().use { inputStream ->
+                    inputStream.copyTo(outputStream)
+                }
             }
+            
+            // Finish writing (Android 10+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            }
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
         }
+        
         return uri
     }
 
@@ -136,7 +145,7 @@ class DownloadWorker(
 
         val notification = NotificationCompat.Builder(applicationContext, channelId)
             .setContentTitle(title)
-            .setContentText("Starting...")
+            .setContentText("開始中...")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, false)
             .setOngoing(true)
