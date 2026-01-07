@@ -1,19 +1,41 @@
 package org.yunfie.ytdlpclient.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import coil3.compose.AsyncImage
-import org.yunfie.ytdlpclient.data.VideoRequest
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import org.yunfie.ytdlpclient.workers.DownloadWorker
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,23 +45,25 @@ fun AppContent(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val savedApiUrl by viewModel.apiUrl.collectAsState()
-    
+    val context = LocalContext.current
+    val workManager = WorkManager.getInstance(context)
+
     // Initial Setup Dialog
     if (uiState.isSetupRequired) {
         var tempUrl by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { }, // Force setup
-            title = { Text("Setup API URL") },
+            onDismissRequest = { },
+            title = { Text("API設定") },
             text = {
                 OutlinedTextField(
                     value = tempUrl,
                     onValueChange = { tempUrl = it },
-                    label = { Text("API Base URL (e.g. http://192.168.1.100:8000)") }
+                    label = { Text("APIのベースURL (例: http://192.168.1.100:8000)") }
                 )
             },
             confirmButton = {
                 Button(onClick = { viewModel.saveApiUrl(tempUrl) }) {
-                    Text("Save")
+                    Text("保存")
                 }
             }
         )
@@ -49,22 +73,31 @@ fun AppContent(
         var tempUrl by remember { mutableStateOf(savedApiUrl ?: "") }
         AlertDialog(
             onDismissRequest = { viewModel.toggleSettings() },
-            title = { Text("Settings") },
+            title = { Text("設定") },
             text = {
-                OutlinedTextField(
-                    value = tempUrl,
-                    onValueChange = { tempUrl = it },
-                    label = { Text("API Base URL") }
-                )
+                Column {
+                    OutlinedTextField(
+                        value = tempUrl,
+                        onValueChange = { tempUrl = it },
+                        label = { Text("APIのベースURL") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "バッテリーの最適化をオフにすることを推奨します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             },
             confirmButton = {
                 Button(onClick = { viewModel.saveApiUrl(tempUrl) }) {
-                    Text("Save")
+                    Text("保存")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.toggleSettings() }) {
-                    Text("Cancel")
+                    Text("キャンセル")
                 }
             }
         )
@@ -73,146 +106,216 @@ fun AppContent(
     Scaffold(
         modifier = modifier,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("yt-dlp Client") },
-                actions = {
-                    IconButton(onClick = { viewModel.toggleSettings() }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                }
-            )
+             // Search Bar Style Top App Bar
+             DockedSearchBar(
+                 query = uiState.urlInput,
+                 onQueryChange = { viewModel.onUrlChanged(it) },
+                 onSearch = { viewModel.fetchInfo() },
+                 active = false,
+                 onActiveChange = {},
+                 placeholder = { Text("YouTubeのURLを入力") },
+                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                 trailingIcon = {
+                     IconButton(onClick = { viewModel.toggleSettings() }) {
+                         Icon(Icons.Default.Settings, contentDescription = "設定")
+                     }
+                 },
+                 modifier = Modifier
+                     .fillMaxWidth()
+                     .padding(16.dp)
+             ) {}
         }
     ) { innerPadding ->
-        HomeScreen(
-            modifier = Modifier.padding(innerPadding),
-            viewModel = viewModel
-        )
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Loading Indicator
+            if (uiState.isLoading) {
+                item {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+
+            // Error Card
+            uiState.error?.let { error ->
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Video Info Card (Main Content)
+            uiState.videoInfo?.let { info ->
+                item {
+                    ElevatedCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp) // Updated to Material 3 rounded styling
+                    ) {
+                        Column {
+                            // Header with Avatar (Simulated) and Text
+                            ListItem(
+                                headlineContent = { Text("動画情報", fontWeight = FontWeight.Bold) },
+                                supportingContent = { Text(info.uploader ?: "Unknown Uploader") },
+                                leadingContent = {
+                                    Surface(
+                                        shape = androidx.compose.foundation.shape.CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = (info.uploader?.take(1) ?: "U").uppercase(),
+                                                style = MaterialTheme.typography.titleMedium
+                                            )
+                                        }
+                                    }
+                                },
+                                trailingContent = {
+                                    IconButton(onClick = { /* More options */ }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                    }
+                                }
+                            )
+
+                            // Media Area
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(info.thumbnail)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Thumbnail",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentScale = ContentScale.Crop
+                            )
+
+                            // Title and Description
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = info.title,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = info.description ?: "説明なし",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Action Chips
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
+                                                .setInputData(workDataOf(
+                                                    DownloadWorker.KEY_URL to uiState.urlInput,
+                                                    DownloadWorker.KEY_FORMAT to "best",
+                                                    DownloadWorker.KEY_AUDIO_ONLY to false,
+                                                    DownloadWorker.KEY_TITLE to info.title
+                                                ))
+                                                .build()
+                                            workManager.enqueue(workRequest)
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.VideoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("動画")
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
+                                                .setInputData(workDataOf(
+                                                    DownloadWorker.KEY_URL to uiState.urlInput,
+                                                    DownloadWorker.KEY_FORMAT to "bestaudio",
+                                                    DownloadWorker.KEY_AUDIO_ONLY to true,
+                                                    DownloadWorker.KEY_TITLE to info.title
+                                                ))
+                                                .build()
+                                            workManager.enqueue(workRequest)
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("音楽")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // History Section Header
+            item {
+                Text(
+                    text = "履歴",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            
+            // Placeholder History Items (To be connected to Room DB later)
+            items(3) { index ->
+                HistoryItemPlaceholder(index)
+            }
+        }
     }
 }
 
 @Composable
-fun HomeScreen(
-    modifier: Modifier = Modifier,
-    viewModel: MainViewModel
-) {
-    val uiState by viewModel.uiState.collectAsState()
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+fun HistoryItemPlaceholder(index: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        OutlinedTextField(
-            value = uiState.urlInput,
-            onValueChange = { viewModel.onUrlChanged(it) },
-            label = { Text("YouTube URL") },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !uiState.isLoading
+        ListItem(
+            headlineContent = { Text("履歴アイテム #${index + 1}") },
+            supportingContent = { Text("2026/01/07 • 4:30") },
+            leadingContent = {
+                Icon(Icons.Default.History, contentDescription = null)
+            },
+            trailingContent = {
+                 IconButton(onClick = {}) {
+                     Icon(Icons.Default.Download, contentDescription = "再ダウンロード")
+                 }
+            }
         )
-
-        Button(
-            onClick = { viewModel.fetchInfo() },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !uiState.isLoading && uiState.urlInput.isNotBlank()
-        ) {
-            if (uiState.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else {
-                Text("Fetch Info")
-            }
-        }
-
-        uiState.error?.let { error ->
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-        }
-
-        uiState.videoInfo?.let { info ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = info.title, style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    AsyncImage(
-                        model = info.thumbnail,
-                        contentDescription = "Thumbnail",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { 
-                                viewModel.startDownload(
-                                    VideoRequest(url = uiState.urlInput, format = "best")
-                                ) 
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Video")
-                        }
-                        
-                        OutlinedButton(
-                            onClick = { 
-                                viewModel.startDownload(
-                                    VideoRequest(url = uiState.urlInput, audioOnly = true)
-                                ) 
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Audio")
-                        }
-                    }
-                }
-            }
-        }
-        
-        uiState.taskStatus?.let { status ->
-             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Status: ${status.status}", style = MaterialTheme.typography.labelLarge)
-                    
-                    status.progress?.let { progress ->
-                        LinearProgressIndicator(
-                            progress = { (progress / 100).toFloat() },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                        )
-                        Text("${String.format("%.1f", progress)}% - ${status.speed ?: "N/A"}")
-                        Text("ETA: ${status.eta ?: "N/A"}")
-                    }
-                    
-                    if (status.status == "downloading" || status.status == "processing") {
-                         Button(
-                            onClick = { viewModel.cancelDownload() },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Text("Cancel")
-                        }
-                    }
-                }
-            }
-        }
     }
 }
