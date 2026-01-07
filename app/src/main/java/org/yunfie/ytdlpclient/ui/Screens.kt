@@ -365,7 +365,7 @@ fun AppContent(
                                 DownloadWorker.KEY_URL to uiState.urlInput,
                                 DownloadWorker.KEY_AUDIO_ONLY to isAudio,
                                 DownloadWorker.KEY_TITLE to uiState.videoInfo!!.title,
-                                DownloadWorker.KEY_UPLOADER to uiState.videoInfo!!.uploader ?: "Unknown",
+                                DownloadWorker.KEY_UPLOADER to (uiState.videoInfo!!.uploader ?: "Unknown"),
                                 DownloadWorker.KEY_THUMBNAIL to uiState.videoInfo!!.thumbnail,
                                 DownloadWorker.KEY_QUALITY to (quality ?: 0) // Fix: Use 0 for null
                             ))
