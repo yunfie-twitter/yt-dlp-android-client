@@ -35,6 +35,7 @@ class DownloadWorker(
     override suspend fun doWork(): Result {
         val url = inputData.getString(KEY_URL) ?: return Result.failure()
         val formatId = inputData.getString(KEY_FORMAT_ID)
+        val quality = if (inputData.hasKeyWithValueOfType<Int>(KEY_QUALITY)) inputData.getInt(KEY_QUALITY, 0) else null
         val audioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
         val title = inputData.getString(KEY_TITLE) ?: "Downloading..."
         val uploader = inputData.getString(KEY_UPLOADER) ?: "Unknown"
@@ -52,10 +53,14 @@ class DownloadWorker(
 
         return try {
             // 1. Start Server Task
-            // Use formatId if provided, otherwise default to "best" or "bestaudio" logic
-            val finalFormat = formatId ?: if (audioOnly) "bestaudio" else "best"
+            // Logic: If quality (height) is provided, use it. Else use format_id if provided. Else defaults.
+            val request = VideoRequest(
+                url = url,
+                format = formatId, // Can be null
+                audioOnly = audioOnly,
+                quality = if (quality != null && quality > 0) quality else null
+            )
             
-            val request = VideoRequest(url = url, format = finalFormat, audioOnly = audioOnly)
             val startResponse = api.startDownload(request)
             val taskId = startResponse.taskId
 
@@ -110,21 +115,6 @@ class DownloadWorker(
         } catch (e: Exception) {
             e.printStackTrace()
             updateNotification(notificationId, "エラー", e.message ?: "Unknown error", 0, false)
-            
-            // Save failed history
-            /*
-            val history = DownloadHistory(
-                title = title,
-                uploader = uploader,
-                url = url,
-                thumbnail = thumbnail,
-                timestamp = System.currentTimeMillis(),
-                status = "failed",
-                isAudio = audioOnly
-            )
-            app.database.historyDao().insert(history)
-            */
-            
             Result.failure(workDataOf("error" to e.message))
         }
     }
@@ -207,8 +197,8 @@ class DownloadWorker(
 
     companion object {
         const val KEY_URL = "key_url"
-        const val KEY_FORMAT_ID = "key_format_id" // Changed from KEY_FORMAT
-        const val KEY_FORMAT = "key_format" // Keep for compatibility/fallback
+        const val KEY_FORMAT_ID = "key_format_id"
+        const val KEY_QUALITY = "key_quality" // Added
         const val KEY_AUDIO_ONLY = "key_audio_only"
         const val KEY_TITLE = "key_title"
         const val KEY_UPLOADER = "key_uploader"
