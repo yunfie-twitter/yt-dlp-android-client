@@ -66,5 +66,8 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    
+    // Fix: Use debugImplementation only for tooling that shouldn't be in release
     debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
