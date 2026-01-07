@@ -35,7 +35,8 @@ class DownloadWorker(
     override suspend fun doWork(): Result {
         val url = inputData.getString(KEY_URL) ?: return Result.failure()
         val formatId = inputData.getString(KEY_FORMAT_ID)
-        val quality = if (inputData.hasKeyWithValueOfType<Int>(KEY_QUALITY)) inputData.getInt(KEY_QUALITY, 0) else null
+        // Fix: Use getInt with default value and takeIf instead of hasKeyWithValueOfType which was causing compilation error
+        val quality = inputData.getInt(KEY_QUALITY, 0).takeIf { it > 0 }
         val audioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
         val title = inputData.getString(KEY_TITLE) ?: "Downloading..."
         val uploader = inputData.getString(KEY_UPLOADER) ?: "Unknown"
@@ -58,7 +59,7 @@ class DownloadWorker(
                 url = url,
                 format = formatId, // Can be null
                 audioOnly = audioOnly,
-                quality = if (quality != null && quality > 0) quality else null
+                quality = quality
             )
             
             val startResponse = api.startDownload(request)
@@ -198,7 +199,7 @@ class DownloadWorker(
     companion object {
         const val KEY_URL = "key_url"
         const val KEY_FORMAT_ID = "key_format_id"
-        const val KEY_QUALITY = "key_quality" // Added
+        const val KEY_QUALITY = "key_quality"
         const val KEY_AUDIO_ONLY = "key_audio_only"
         const val KEY_TITLE = "key_title"
         const val KEY_UPLOADER = "key_uploader"
