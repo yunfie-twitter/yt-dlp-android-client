@@ -5,12 +5,14 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.room.Room
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import org.yunfie.ytdlpclient.data.YtDlpApi
 import org.yunfie.ytdlpclient.data.repository.SettingsRepository
+import org.yunfie.ytdlpclient.data.room.AppDatabase
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
@@ -21,6 +23,9 @@ class YtDlpApplication : Application() {
     
     // Repository instance
     lateinit var settingsRepository: SettingsRepository
+    
+    // Database instance
+    lateinit var database: AppDatabase
 
     // Setup JSON configuration
     private val networkJson = Json {
@@ -31,6 +36,12 @@ class YtDlpApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         settingsRepository = SettingsRepository(this)
+        
+        database = Room.databaseBuilder(
+            applicationContext,
+            AppDatabase::class.java,
+            "ytdlp-database"
+        ).build()
     }
 
     fun createApi(baseUrl: String): YtDlpApi {
