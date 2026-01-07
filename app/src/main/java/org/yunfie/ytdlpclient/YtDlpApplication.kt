@@ -5,7 +5,6 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
-import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -13,6 +12,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import org.yunfie.ytdlpclient.data.YtDlpApi
 import org.yunfie.ytdlpclient.data.repository.SettingsRepository
 import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
