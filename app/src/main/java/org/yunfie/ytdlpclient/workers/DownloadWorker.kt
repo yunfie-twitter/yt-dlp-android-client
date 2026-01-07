@@ -112,9 +112,9 @@ class DownloadWorker(
             
             // Save file logic
             val savedUri = if (downloadLocation != null) {
-                saveFileToSaf(responseBody, serverFilename, isAudio, Uri.parse(downloadLocation))
+                saveFileToSaf(responseBody, serverFilename, audioOnly, Uri.parse(downloadLocation))
             } else {
-                saveFileToMediaStore(responseBody, serverFilename, isAudio)
+                saveFileToMediaStore(responseBody, serverFilename, audioOnly)
             } ?: throw Exception("Failed to save file")
 
             updateNotification(notificationId, title, "ダウンロード完了", 100, false)
