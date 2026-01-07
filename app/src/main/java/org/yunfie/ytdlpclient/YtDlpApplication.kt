@@ -11,6 +11,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import org.yunfie.ytdlpclient.data.YtDlpApi
+import org.yunfie.ytdlpclient.data.repository.HistoryRepository
 import org.yunfie.ytdlpclient.data.repository.SettingsRepository
 import org.yunfie.ytdlpclient.data.room.AppDatabase
 import retrofit2.Retrofit
@@ -21,8 +22,9 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "se
 
 class YtDlpApplication : Application() {
     
-    // Repository instance
+    // Repository instances
     lateinit var settingsRepository: SettingsRepository
+    lateinit var historyRepository: HistoryRepository
     
     // Database instance
     lateinit var database: AppDatabase
@@ -42,6 +44,8 @@ class YtDlpApplication : Application() {
             AppDatabase::class.java,
             "ytdlp-database"
         ).build()
+
+        historyRepository = HistoryRepository(database.historyDao())
     }
 
     fun createApi(baseUrl: String): YtDlpApi {
