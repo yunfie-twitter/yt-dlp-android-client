@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -20,9 +21,8 @@ import okhttp3.ResponseBody
 import org.yunfie.ytdlpclient.YtDlpApplication
 import org.yunfie.ytdlpclient.data.VideoRequest
 import org.yunfie.ytdlpclient.data.room.DownloadHistory
-import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.UUID
 
 class DownloadWorker(
     context: Context,
@@ -35,7 +35,6 @@ class DownloadWorker(
     override suspend fun doWork(): Result {
         val url = inputData.getString(KEY_URL) ?: return Result.failure()
         val formatId = inputData.getString(KEY_FORMAT_ID)
-        // Fix: Use getInt with default value and takeIf instead of hasKeyWithValueOfType which was causing compilation error
         val quality = inputData.getInt(KEY_QUALITY, 0).takeIf { it > 0 }
         val audioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
         val title = inputData.getString(KEY_TITLE) ?: "Downloading..."
@@ -46,18 +45,34 @@ class DownloadWorker(
         setForeground(createForegroundInfo(notificationId, title, 0))
 
         val app = applicationContext as YtDlpApplication
+        val historyRepo = app.historyRepository
+        
+        // 0. Insert into history as downloading
+        val history = DownloadHistory(
+            title = title,
+            uploader = uploader,
+            url = url,
+            thumbnail = thumbnail,
+            timestamp = System.currentTimeMillis(),
+            status = "downloading",
+            isAudio = audioOnly,
+            workId = id.toString()
+        )
+        val historyId = historyRepo.insert(history)
         
         val baseUrl = app.settingsRepository.apiUrl.firstOrNull() 
             ?: return Result.failure(workDataOf("error" to "API URL not set"))
+            
+        // Check for custom download location
+        val downloadLocation = app.settingsRepository.downloadLocation.firstOrNull()
         
         val api = app.createApi(baseUrl)
 
         return try {
             // 1. Start Server Task
-            // Logic: If quality (height) is provided, use it. Else use format_id if provided. Else defaults.
             val request = VideoRequest(
                 url = url,
-                format = formatId, // Can be null
+                format = formatId,
                 audioOnly = audioOnly,
                 quality = quality
             )
@@ -94,29 +109,49 @@ class DownloadWorker(
             updateNotification(notificationId, title, "端末にダウンロード中...", 50)
             
             val responseBody = api.downloadFile(serverFilename)
-            val savedUri = saveFileToMediaStore(responseBody, serverFilename, audioOnly)
-                ?: throw Exception("Failed to save file to MediaStore")
+            
+            // Save file logic
+            val savedUri = if (downloadLocation != null) {
+                saveFileToSaf(responseBody, serverFilename, isAudio, Uri.parse(downloadLocation))
+            } else {
+                saveFileToMediaStore(responseBody, serverFilename, isAudio)
+            } ?: throw Exception("Failed to save file")
 
             updateNotification(notificationId, title, "ダウンロード完了", 100, false)
             
-            // 4. Save to History
-            val history = DownloadHistory(
-                title = title,
-                uploader = uploader,
-                url = url,
-                thumbnail = thumbnail,
-                timestamp = System.currentTimeMillis(),
-                status = "completed",
-                filePath = savedUri.toString(),
-                isAudio = audioOnly
-            )
-            app.database.historyDao().insert(history)
+            // 4. Update History to completed
+            historyRepo.updateStatus(historyId, "completed", savedUri.toString())
             
             Result.success(workDataOf("uri" to savedUri.toString()))
         } catch (e: Exception) {
             e.printStackTrace()
             updateNotification(notificationId, "エラー", e.message ?: "Unknown error", 0, false)
+            
+            // Update History to failed
+            historyRepo.updateStatusOnly(historyId, "failed")
+            
             Result.failure(workDataOf("error" to e.message))
+        }
+    }
+
+    private suspend fun saveFileToSaf(body: ResponseBody, filename: String, isAudio: Boolean, treeUri: Uri): Uri? {
+        val context = applicationContext
+        val docFile = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        val mimeType = if (isAudio) "audio/mp3" else "video/mp4"
+        
+        // Create file
+        val file = docFile.createFile(mimeType, filename) ?: return null
+        
+        return try {
+            context.contentResolver.openOutputStream(file.uri)?.use { outputStream ->
+                body.byteStream().use { inputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            }
+            file.uri
+        } catch (e: Exception) {
+            file.delete()
+            throw e
         }
     }
 
