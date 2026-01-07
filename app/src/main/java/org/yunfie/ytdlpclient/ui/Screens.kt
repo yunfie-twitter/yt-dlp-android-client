@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -300,20 +301,10 @@ fun AppContent(
                                         Text(text = info.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         Spacer(modifier = Modifier.height(16.dp))
 
-                                        // Check if this video is currently downloading
-                                        // (This is a rough check based on URL matching for now, could be better)
-                                        val isDownloading = activeWorks.any { work ->
-                                            work.tags.contains("url_${info.webpageUrl}") // Assuming we tag works
-                                            // Since we didn't add unique tags yet, use global isDownloading fallback
-                                            false
-                                        } || uiState.isDownloading // Simplification
-                                        
-                                        // Better check: If any active work matches our criteria? 
-                                        // For now, simple button
                                         Button(
                                             onClick = { showDownloadSheet = true },
                                             modifier = Modifier.fillMaxWidth(),
-                                            enabled = !uiState.isDownloading // Disable if downloading? Or allow parallel
+                                            enabled = !uiState.isDownloading 
                                         ) {
                                             if (uiState.isDownloading) {
                                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -376,10 +367,9 @@ fun AppContent(
                                 DownloadWorker.KEY_TITLE to uiState.videoInfo!!.title,
                                 DownloadWorker.KEY_UPLOADER to uiState.videoInfo!!.uploader ?: "Unknown",
                                 DownloadWorker.KEY_THUMBNAIL to uiState.videoInfo!!.thumbnail,
-                                DownloadWorker.KEY_QUALITY to quality
+                                DownloadWorker.KEY_QUALITY to (quality ?: 0) // Fix: Use 0 for null
                             ))
-                            .addTag("download_work") // General tag
-                            // .addTag("url_${uiState.urlInput}") // Specific tag for matching
+                            .addTag("download_work")
                             .build()
                         workManager.enqueue(workRequest)
                         
@@ -488,9 +478,7 @@ fun HistoryItem(history: DownloadHistory, isDownloading: Boolean, onDelete: () -
                              LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                         }
                     } else {
-                        // Changed URL to Uploader as requested
                         val date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(history.timestamp))
-                        // Display: Uploader • Date • Type
                         Text("${history.uploader} • $date • ${if (history.isAudio) "音声" else "動画"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
