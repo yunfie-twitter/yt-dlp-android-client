@@ -1,47 +1,59 @@
 package org.yunfie.ytdlpclient
 
 import android.app.Application
+import android.content.Context
+import androidx.datastore.preferences.preferencesDataStore
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
-import org.yunfie.ytdlpclient.data.SettingsRepository
-import org.yunfie.ytdlpclient.data.YtDlpApi
+import org.yunfie.ytdlpclient.data.api.YtDlpApiService
+import org.yunfie.ytdlpclient.data.repository.HistoryRepository
+import org.yunfie.ytdlpclient.data.repository.SettingsRepository
 import retrofit2.Retrofit
-import java.util.concurrent.TimeUnit
+
+// Extension property for DataStore
+val Context.dataStore by preferencesDataStore(name = "settings")
 
 class YtDlpApplication : Application() {
-    lateinit var settingsRepository: SettingsRepository
-        private set
+    // ... existing code ...
+    lateinit var container: AppContainer
 
     override fun onCreate() {
         super.onCreate()
-        settingsRepository = SettingsRepository(this)
+        container = AppContainer(this)
+    }
+}
+
+class AppContainer(private val context: Context) {
+    private val baseUrl = "http://10.0.2.2:8000" // Emulator localhost
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val loggingInterceptor = HttpLoggingInterceptor().apply {
+        level = HttpLoggingInterceptor.Level.BODY
     }
 
-    // Factory for creating API client with dynamic base URL
-    fun createApi(baseUrl: String): YtDlpApi {
-        // Ensure trailing slash
-        val validUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+    private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(loggingInterceptor)
+        .build()
 
-        val json = Json { ignoreUnknownKeys = true }
-        
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
+    private val retrofit = Retrofit.Builder()
+        .baseUrl(baseUrl)
+        .client(okHttpClient)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
 
-        val client = OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .build()
+    val apiService: YtDlpApiService by lazy {
+        retrofit.create(YtDlpApiService::class.java)
+    }
 
-        return Retrofit.Builder()
-            .baseUrl(validUrl)
-            .client(client)
-            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
-            .build()
-            .create(YtDlpApi::class.java)
+    val settingsRepository by lazy {
+        SettingsRepository(context.dataStore)
+    }
+
+    val historyRepository by lazy {
+        HistoryRepository(context.dataStore)
     }
 }
