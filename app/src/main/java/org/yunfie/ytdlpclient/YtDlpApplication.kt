@@ -11,6 +11,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import org.yunfie.ytdlpclient.data.YtDlpApi
+import org.yunfie.ytdlpclient.data.repository.SettingsRepository
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 
@@ -18,6 +19,9 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "se
 
 class YtDlpApplication : Application() {
     
+    // Repository instance
+    lateinit var settingsRepository: SettingsRepository
+
     // Setup JSON configuration
     private val networkJson = Json {
         ignoreUnknownKeys = true
@@ -26,6 +30,7 @@ class YtDlpApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        settingsRepository = SettingsRepository(this)
     }
 
     fun createApi(baseUrl: String): YtDlpApi {
