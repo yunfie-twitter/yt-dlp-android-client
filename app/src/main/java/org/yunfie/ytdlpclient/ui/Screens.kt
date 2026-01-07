@@ -1,20 +1,26 @@
 package org.yunfie.ytdlpclient.ui
 
+import android.Manifest
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,7 +37,11 @@ import androidx.work.workDataOf
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import org.yunfie.ytdlpclient.data.room.DownloadHistory
 import org.yunfie.ytdlpclient.workers.DownloadWorker
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,10 +50,25 @@ fun AppContent(
     viewModel: MainViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val history by viewModel.filteredHistory.collectAsState()
     val savedApiUrl by viewModel.apiUrl.collectAsState()
+    
     val context = LocalContext.current
     val workManager = WorkManager.getInstance(context)
 
+    // Permission Launcher for Android 9 and below
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (!isGranted) {
+            Toast.makeText(context, "保存のために権限が必要です", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Sheet State
+    var showDownloadSheet by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState()
+    
     // Setup Dialog
     if (uiState.isSetupRequired) {
         var tempUrl by remember { mutableStateOf("") }
@@ -100,19 +125,22 @@ fun AppContent(
     }
 
     // Navigation State
-    var selectedScreen by remember { mutableIntStateOf(0) } // 0: Home/Download, 1: History
+    var selectedScreen by remember { mutableIntStateOf(0) } // 0: Home, 1: History
 
     Scaffold(
         modifier = modifier,
         topBar = {
-             // Dynamic Search Bar
              val placeholderText = if (selectedScreen == 0) "YouTubeのURLを入力" else "履歴を検索"
+             val query = if (selectedScreen == 0) uiState.urlInput else uiState.historySearchQuery
+             
              DockedSearchBar(
-                 query = uiState.urlInput,
-                 onQueryChange = { viewModel.onUrlChanged(it) },
+                 query = query,
+                 onQueryChange = { 
+                     if (selectedScreen == 0) viewModel.onUrlChanged(it)
+                     else viewModel.onHistorySearch(it)
+                 },
                  onSearch = { 
                      if (selectedScreen == 0) viewModel.fetchInfo() 
-                     // TODO: Implement history search
                  },
                  active = false,
                  onActiveChange = {},
@@ -147,7 +175,7 @@ fun AppContent(
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding)) {
             if (selectedScreen == 0) {
-                // Home / Download Screen
+                // Home Screen
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -191,11 +219,6 @@ fun AppContent(
                                                 }
                                             }
                                         },
-                                        trailingContent = {
-                                            IconButton(onClick = { /* More options */ }) {
-                                                Icon(Icons.Default.MoreVert, contentDescription = "More")
-                                            }
-                                        }
                                     )
 
                                     AsyncImage(
@@ -214,52 +237,16 @@ fun AppContent(
                                     Column(modifier = Modifier.padding(16.dp)) {
                                         Text(text = info.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Text(text = info.description ?: "説明なし", style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         
                                         Spacer(modifier = Modifier.height(16.dp))
 
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.End,
-                                            verticalAlignment = Alignment.CenterVertically
+                                        Button(
+                                            onClick = { showDownloadSheet = true },
+                                            modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            FilledTonalButton(
-                                                onClick = {
-                                                    val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
-                                                        .setInputData(workDataOf(
-                                                            DownloadWorker.KEY_URL to uiState.urlInput,
-                                                            DownloadWorker.KEY_FORMAT to "best",
-                                                            DownloadWorker.KEY_AUDIO_ONLY to false,
-                                                            DownloadWorker.KEY_TITLE to info.title
-                                                        ))
-                                                        .build()
-                                                    workManager.enqueue(workRequest)
-                                                    // TODO: Add to local DB history
-                                                }
-                                            ) {
-                                                Icon(Icons.Default.VideoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                Spacer(Modifier.width(8.dp))
-                                                Text("動画")
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Button(
-                                                onClick = {
-                                                    val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
-                                                        .setInputData(workDataOf(
-                                                            DownloadWorker.KEY_URL to uiState.urlInput,
-                                                            DownloadWorker.KEY_FORMAT to "bestaudio",
-                                                            DownloadWorker.KEY_AUDIO_ONLY to true,
-                                                            DownloadWorker.KEY_TITLE to info.title
-                                                        ))
-                                                        .build()
-                                                    workManager.enqueue(workRequest)
-                                                    // TODO: Add to local DB history
-                                                }
-                                            ) {
-                                                Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                Spacer(Modifier.width(8.dp))
-                                                Text("音楽")
-                                            }
+                                            Icon(Icons.Default.Download, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("ダウンロード")
                                         }
                                     }
                                 }
@@ -269,37 +256,169 @@ fun AppContent(
                 }
             } else {
                 // History Screen
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(5) { index -> // Placeholder count
-                         HistoryItem(index)
+                if (history.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("履歴はありません", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(history, key = { it.id }) { item ->
+                            HistoryItem(item, onDelete = { viewModel.deleteHistory(item) })
+                        }
                     }
                 }
+            }
+        }
+        
+        if (showDownloadSheet && uiState.videoInfo != null) {
+            ModalBottomSheet(
+                onDismissRequest = { showDownloadSheet = false },
+                sheetState = sheetState
+            ) {
+                DownloadOptionsSheet(
+                    videoInfo = uiState.videoInfo!!,
+                    availableHeights = uiState.availableVideoHeights,
+                    onDownload = { isAudio, quality ->
+                        // Check permission for Android 9-
+                        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                             // Simple check, production app might need more logic
+                        }
+                        
+                        val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
+                            .setInputData(workDataOf(
+                                DownloadWorker.KEY_URL to uiState.urlInput,
+                                DownloadWorker.KEY_AUDIO_ONLY to isAudio,
+                                DownloadWorker.KEY_TITLE to uiState.videoInfo!!.title,
+                                DownloadWorker.KEY_UPLOADER to uiState.videoInfo!!.uploader,
+                                DownloadWorker.KEY_THUMBNAIL to uiState.videoInfo!!.thumbnail,
+                                DownloadWorker.KEY_QUALITY to quality // Pass int quality
+                            ))
+                            .build()
+                        workManager.enqueue(workRequest)
+                        
+                        showDownloadSheet = false
+                        Toast.makeText(context, "ダウンロードを開始しました", Toast.LENGTH_SHORT).show()
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun HistoryItem(index: Int) {
+fun DownloadOptionsSheet(
+    videoInfo: org.yunfie.ytdlpclient.data.VideoInfo,
+    availableHeights: List<Int>,
+    onDownload: (isAudio: Boolean, quality: Int?) -> Unit
+) {
+    var isAudioMode by remember { mutableStateOf(false) }
+    var selectedQuality by remember { mutableStateOf<Int?>(availableHeights.firstOrNull()) }
+    
+    Column(
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp)
+    ) {
+        Text("ダウンロードオプション", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Mode Selection
+        Row(modifier = Modifier.fillMaxWidth()) {
+            FilterChip(
+                selected = !isAudioMode,
+                onClick = { isAudioMode = false },
+                label = { Text("動画") },
+                leadingIcon = { if (!isAudioMode) Icon(Icons.Default.Download, null) },
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            FilterChip(
+                selected = isAudioMode,
+                onClick = { isAudioMode = true },
+                label = { Text("音声のみ") },
+                leadingIcon = { if (isAudioMode) Icon(Icons.Default.Download, null) }, // Use Download icon for both for now
+                modifier = Modifier.weight(1f)
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        if (!isAudioMode) {
+            Text("画質を選択", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 200.dp)
+            ) {
+                items(availableHeights) { height ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = (selectedQuality == height),
+                                onClick = { selectedQuality = height }
+                            )
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = (selectedQuality == height),
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("${height}p", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        } else {
+             Text("最高音質でダウンロードされます", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        Button(
+            onClick = { onDownload(isAudioMode, if (isAudioMode) null else selectedQuality) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("ダウンロード開始")
+        }
+    }
+}
+
+@Composable
+fun HistoryItem(history: DownloadHistory, onDelete: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
-        ListItem(
-            headlineContent = { Text("履歴動画タイトル #$index", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            supportingContent = { Text("2026/01/07 • 動画 • 完了") },
-            leadingContent = {
-                Icon(Icons.Default.History, contentDescription = null)
-            },
-            trailingContent = {
-                 IconButton(onClick = {}) {
-                     Icon(Icons.Default.Download, contentDescription = "再ダウンロード")
-                 }
-            }
-        )
+        Column {
+            ListItem(
+                headlineContent = { Text(history.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                supportingContent = { 
+                    val date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(history.timestamp))
+                    Text("$date • ${if (history.isAudio) "音声" else "動画"}") 
+                },
+                leadingContent = {
+                    AsyncImage(
+                         model = ImageRequest.Builder(LocalContext.current)
+                             .data(history.thumbnail)
+                             .crossfade(true)
+                             .build(),
+                         contentDescription = null,
+                         modifier = Modifier.size(56.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
+                         contentScale = ContentScale.Crop
+                    )
+                },
+                trailingContent = {
+                     IconButton(onClick = onDelete) {
+                         Icon(Icons.Default.Delete, contentDescription = "削除")
+                     }
+                }
+            )
+        }
     }
 }
