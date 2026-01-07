@@ -67,7 +67,11 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     
-    // Fix: Use debugImplementation only for tooling that shouldn't be in release
+    // Correct usage: Use debugImplementation for tooling, but avoid conflicting configurations
     debugImplementation(libs.androidx.ui.tooling)
+    // The previous error was caused by consuming a configuration not meant for resolution directly.
+    // Using standard debugImplementation is correct for Android plugins. 
+    // If issues persist, it often relates to how attributes are matched.
+    // Ensure libs.androidx.ui.test.manifest is strictly used for debug variant manifest merging.
     debugImplementation(libs.androidx.ui.test.manifest)
 }
