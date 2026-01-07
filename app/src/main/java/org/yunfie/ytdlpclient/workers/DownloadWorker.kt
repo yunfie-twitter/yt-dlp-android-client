@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -41,7 +42,6 @@ class DownloadWorker(
 
         val app = applicationContext as YtDlpApplication
         
-        // Fix: Use correct import for firstOrNull() instead of inline package name
         val baseUrl = app.settingsRepository.apiUrl.firstOrNull() 
             ?: return Result.failure(workDataOf("error" to "API URL not set"))
         
@@ -61,7 +61,6 @@ class DownloadWorker(
                 val status = api.getTaskStatus(taskId)
                 
                 // Update notification (0-50% for server processing)
-                // We map server progress 0-100 to local 0-50
                 val serverProgress = status.progress ?: 0.0
                 val displayProgress = (serverProgress / 2).toInt()
                 
@@ -101,7 +100,6 @@ class DownloadWorker(
             put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
             put(MediaStore.MediaColumns.MIME_TYPE, if (isAudio) "audio/mp3" else "video/mp4")
             put(MediaStore.MediaColumns.RELATIVE_PATH, if (isAudio) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_MOVIES)
-            // For Android 10+ (Q), IS_PENDING is used while writing
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
@@ -122,7 +120,6 @@ class DownloadWorker(
                 }
             }
             
-            // Finish writing (Android 10+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 contentValues.clear()
                 contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -151,7 +148,15 @@ class DownloadWorker(
             .setOngoing(true)
             .build()
 
-        return ForegroundInfo(id, notification)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                id, 
+                notification, 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            ForegroundInfo(id, notification)
+        }
     }
 
     private fun updateNotification(id: Int, title: String, content: String, progress: Int, ongoing: Boolean = true) {
