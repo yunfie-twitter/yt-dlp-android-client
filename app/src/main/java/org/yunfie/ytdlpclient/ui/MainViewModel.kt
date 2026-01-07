@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -18,6 +19,7 @@ import org.yunfie.ytdlpclient.data.TaskStatus
 import org.yunfie.ytdlpclient.data.VideoInfo
 import org.yunfie.ytdlpclient.data.VideoRequest
 import org.yunfie.ytdlpclient.data.YtDlpApi
+import org.yunfie.ytdlpclient.data.room.DownloadHistory
 
 data class MainUiState(
     val urlInput: String = "",
@@ -27,17 +29,36 @@ data class MainUiState(
     val currentTaskId: String? = null,
     val taskStatus: TaskStatus? = null,
     val isSetupRequired: Boolean = false,
-    val showSettings: Boolean = false
+    val showSettings: Boolean = false,
+    val historySearchQuery: String = "",
+    // Pre-computed quality options
+    val availableVideoHeights: List<Int> = emptyList()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = getApplication<YtDlpApplication>().settingsRepository
+    private val settingsRepository = getApplication<YtDlpApplication>().settingsRepository
+    private val historyRepository = getApplication<YtDlpApplication>().historyRepository
     private var api: YtDlpApi? = null
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState = _uiState.asStateFlow()
 
-    val apiUrl = repository.apiUrl.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val apiUrl = settingsRepository.apiUrl.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // History Flow
+    private val _history = historyRepository.allHistory
+    
+    // Filtered History Flow
+    val filteredHistory = combine(_history, _uiState) { history, state ->
+        if (state.historySearchQuery.isBlank()) {
+            history
+        } else {
+            history.filter { 
+                it.title.contains(state.historySearchQuery, ignoreCase = true) ||
+                it.url.contains(state.historySearchQuery, ignoreCase = true)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var pollingJob: Job? = null
 
@@ -61,10 +82,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun onUrlChanged(newUrl: String) {
         _uiState.update { it.copy(urlInput = newUrl) }
     }
+    
+    fun onHistorySearch(query: String) {
+        _uiState.update { it.copy(historySearchQuery = query) }
+    }
 
     fun saveApiUrl(url: String) {
         viewModelScope.launch {
-            repository.saveApiUrl(url)
+            settingsRepository.saveApiUrl(url)
             _uiState.update { it.copy(isSetupRequired = false, showSettings = false) }
         }
     }
@@ -82,70 +107,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val info = api!!.getVideoInfo(InfoRequest(url))
-                _uiState.update { it.copy(isLoading = false, videoInfo = info) }
+                
+                // Extract available video heights
+                val heights = info.formats
+                    .filter { it.height != null && it.vcodec != "none" }
+                    .mapNotNull { it.height }
+                    .distinct()
+                    .sortedDescending()
+                
+                _uiState.update { it.copy(
+                    isLoading = false, 
+                    videoInfo = info,
+                    availableVideoHeights = heights
+                ) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, error = e.localizedMessage ?: "Failed to fetch info") }
             }
         }
     }
-
-    fun startDownload(videoRequest: VideoRequest) {
-        if (api == null) return
-
-        _uiState.update { it.copy(isLoading = true, error = null) }
-
-        viewModelScope.launch {
-            try {
-                val response = api!!.startDownload(videoRequest)
-                val taskId = response.taskId
-                _uiState.update { it.copy(isLoading = false, currentTaskId = taskId) }
-                startPolling(taskId)
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = e.localizedMessage ?: "Failed to start download") }
-            }
-        }
-    }
-
-    private fun startPolling(taskId: String) {
-        pollingJob?.cancel()
-        pollingJob = viewModelScope.launch {
-            while (isActive) {
-                try {
-                    val status = api!!.getTaskStatus(taskId)
-                    _uiState.update { it.copy(taskStatus = status) }
-                    
-                    if (status.status == "completed" || status.status == "error") {
-                        break
-                    }
-                } catch (e: Exception) {
-                    // Ignore transient errors during polling
-                }
-                delay(1000)
-            }
-        }
-    }
-
-    fun cancelDownload() {
-        val taskId = _uiState.value.currentTaskId ?: return
-        if (api == null) return
-
-        viewModelScope.launch {
-            try {
-                api!!.cancelDownload(taskId)
-                pollingJob?.cancel()
-                _uiState.update { it.copy(taskStatus = it.taskStatus?.copy(status = "cancelling")) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Failed to cancel: ${e.message}") }
-            }
-        }
-    }
     
-    fun clearError() {
-        _uiState.update { it.copy(error = null) }
-    }
-    
-    fun clearTask() {
-        pollingJob?.cancel()
-        _uiState.update { it.copy(currentTaskId = null, taskStatus = null) }
+    fun deleteHistory(history: DownloadHistory) {
+        viewModelScope.launch {
+            historyRepository.delete(history)
+        }
     }
 }
