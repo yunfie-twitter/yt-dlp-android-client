@@ -1,14 +1,18 @@
 package org.yunfie.ytdlpclient.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -31,19 +35,23 @@ data class MainUiState(
     val isSetupRequired: Boolean = false,
     val showSettings: Boolean = false,
     val historySearchQuery: String = "",
-    // Pre-computed quality options
-    val availableVideoHeights: List<Int> = emptyList()
+    val availableVideoHeights: List<Int> = emptyList(),
+    // New
+    val isDownloading: Boolean = false, // If ANY download is running
+    val activeDownloadsCount: Int = 0
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = getApplication<YtDlpApplication>().settingsRepository
     private val historyRepository = getApplication<YtDlpApplication>().historyRepository
+    private val workManager = WorkManager.getInstance(application)
     private var api: YtDlpApi? = null
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState = _uiState.asStateFlow()
 
     val apiUrl = settingsRepository.apiUrl.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val downloadLocation = settingsRepository.downloadLocation.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     // History Flow
     private val _history = historyRepository.allHistory
@@ -59,6 +67,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    
+    // Active Works Flow
+    // We observe all works with our tag to see if any are running
+    // Tag "download_work" needs to be added when enqueuing
+    val activeWorks = workManager.getWorkInfosByTagFlow("download_work")
+        .map { works -> works.filter { !it.state.isFinished } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var pollingJob: Job? = null
 
@@ -74,6 +89,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (e: Exception) {
                         _uiState.update { it.copy(error = "Invalid API URL format") }
                     }
+                }
+            }
+        }
+        
+        viewModelScope.launch {
+            activeWorks.collect { works ->
+                _uiState.update { 
+                    it.copy(
+                        isDownloading = works.isNotEmpty(),
+                        activeDownloadsCount = works.size
+                    )
                 }
             }
         }
@@ -93,6 +119,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(isSetupRequired = false, showSettings = false) }
         }
     }
+    
+    fun saveDownloadLocation(uri: Uri) {
+        viewModelScope.launch {
+            settingsRepository.saveDownloadLocation(uri.toString())
+        }
+    }
 
     fun toggleSettings() {
         _uiState.update { it.copy(showSettings = !it.showSettings) }
@@ -108,7 +140,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val info = api!!.getVideoInfo(InfoRequest(url))
                 
-                // Extract available video heights
                 val heights = info.formats
                     .filter { it.height != null && it.vcodec != "none" }
                     .mapNotNull { it.height }
@@ -130,5 +161,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             historyRepository.delete(history)
         }
+    }
+    
+    // Check if a specific history item is currently downloading
+    fun isHistoryItemDownloading(history: DownloadHistory, activeWorks: List<WorkInfo>): Boolean {
+        // Since we didn't save workId in DB in previous versions, fallback to matching title/url if workId is null
+        // But we just added workId, so use it primarily
+        if (history.workId != null) {
+            return activeWorks.any { it.id.toString() == history.workId }
+        }
+        // Fallback (weak matching)
+        return history.status == "downloading"
     }
 }
